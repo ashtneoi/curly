@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::io;
 use std::io::prelude::*;
 
-#[derive(Eq, PartialEq)]
 pub enum RenderError {
     MissingBrace(Pos),
     UnexpectedBrace(Pos),
     UndefinedName(Pos, String),
+    IoError(io::Error),
 }
 
 impl fmt::Debug for RenderError {
@@ -18,6 +19,8 @@ impl fmt::Debug for RenderError {
                 write!(f, "{:?}: Unexpected opening brace", pos),
             RenderError::UndefinedName(pos, name) =>
                 write!(f, "{:?}: Name '{}' is undefined", pos, name),
+            RenderError::IoError(err) =>
+                write!(f, "IO error: {:?}", err),
         }
     }
 }
@@ -115,15 +118,18 @@ pub fn render(
     let mut maybe_prev: Option<Pos> = None;
     for (replace_from, replace_to, name) in replace {
         if let Some(prev) = maybe_prev {
-            out.write(tmpl_all[prev.raw..replace_from.raw].as_bytes());
+            out.write(tmpl_all[prev.raw..replace_from.raw].as_bytes())
+                .map_err(|e| RenderError::IoError(e))?;
         } else {
-            out.write(tmpl_all[0..replace_from.raw].as_bytes());
+            out.write(tmpl_all[0..replace_from.raw].as_bytes())
+                .map_err(|e| RenderError::IoError(e))?;
         }
 
         if let Some((name_from, name_to)) = name {
             let name = &tmpl_all[name_from.raw..name_to.raw];
             if let Some(val) = ctx.get(name) {
-                out.write(val.as_bytes());
+                out.write(val.as_bytes())
+                    .map_err(|e| RenderError::IoError(e))?;
             } else {
                 return Err(
                     RenderError::UndefinedName(name_from, name.to_string())
@@ -134,9 +140,11 @@ pub fn render(
         maybe_prev = Some(replace_to);
     }
     if let Some(prev) = maybe_prev {
-        out.write(tmpl_all[prev.raw..tmpl_all.len()].as_bytes());
+        out.write(tmpl_all[prev.raw..tmpl_all.len()].as_bytes())
+            .map_err(|e| RenderError::IoError(e))?;
     } else {
-        out.write(tmpl_all.as_bytes());
+        out.write(tmpl_all.as_bytes())
+            .map_err(|e| RenderError::IoError(e))?;
     }
 
     return Ok(());
@@ -150,77 +158,77 @@ mod test {
 
     #[test]
     fn test_simple_render() {
-        let r = "hello there";
+        let r = "hello there.";
         let mut w = Vec::new();
         render(r.as_bytes(), &mut w, &HashMap::<String, String>::new())
             .unwrap();
-        assert_eq!(str::from_utf8(&w).unwrap(), "hello there");
+        assert_eq!(str::from_utf8(&w).unwrap(), "hello there.");
     }
 
     #[test]
     fn test_escape() {
-        let r = "hello {!there}";
+        let r = "hello {!there}.";
         let mut w = Vec::new();
         render(r.as_bytes(), &mut w, &HashMap::<String, String>::new())
             .unwrap();
-        assert_eq!(str::from_utf8(&w).unwrap(), "hello {there}");
+        assert_eq!(str::from_utf8(&w).unwrap(), "hello {there}.");
     }
 
     #[test]
     fn test_render() {
-        let r = "hello {place}";
+        let r = "hello {place}.";
         let mut w = Vec::new();
         let mut h = HashMap::new();
         h.insert("place".to_string(), "there".to_string());
         render(r.as_bytes(), &mut w, &h).unwrap();
-        assert_eq!(str::from_utf8(&w).unwrap(), "hello there");
+        assert_eq!(str::from_utf8(&w).unwrap(), "hello there.");
 
-        let r = "hello {place";
+        let r = "hello {place.";
         let mut w = Vec::new();
-        assert_eq!(
-            render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err(),
+        match render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err() {
             RenderError::MissingBrace(
                 Pos { raw: 6, row: 1, col: 7 },
-            ),
-        );
+            ) => (),
+            _ => panic!(),
+        }
 
-        let r = "hello {place\n}";
+        let r = "hello {place\n}.";
         let mut w = Vec::new();
-        assert_eq!(
-            render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err(),
+        match render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err() {
             RenderError::MissingBrace(
                 Pos { raw: 6, row: 1, col: 7 },
-            ),
-        );
+            ) => (),
+            _ => panic!(),
+        }
 
         let r = "hello {{";
         let mut w = Vec::new();
-        assert_eq!(
-            render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err(),
+        match render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err() {
             RenderError::UnexpectedBrace(
                 Pos { raw: 7, row: 1, col: 8 },
-            ),
-        );
+            ) => (),
+            _ => panic!(),
+        }
 
-        let r = "hello {place{";
+        let r = "hello {place{.";
         let mut w = Vec::new();
-        assert_eq!(
-            render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err(),
+        match render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err() {
             RenderError::UnexpectedBrace(
                 Pos { raw: 12, row: 1, col: 13 },
-            ),
-        );
+            ) => (),
+            _ => panic!(),
+        }
 
-        let r = "hello {place}";
+        let r = "hello {place}.";
         let mut w = Vec::new();
         let mut h = HashMap::new();
         h.insert("face".to_string(), "there".to_string());
-        assert_eq!(
-            render(r.as_bytes(), &mut w, &h).unwrap_err(),
+        match render(r.as_bytes(), &mut w, &h).unwrap_err() {
             RenderError::UndefinedName(
                 Pos { raw: 7, row: 1, col: 8 },
-                "place".to_string(),
-            ),
-        );
+                place,
+            ) => assert_eq!(place, "place"),
+            _ => panic!(),
+        }
     }
 }
