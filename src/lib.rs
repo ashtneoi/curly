@@ -4,13 +4,16 @@ use std::io::prelude::*;
 
 pub enum RenderError {
     MissingBrace(Pos),
+    UndefinedName(Pos, String),
 }
 
 impl fmt::Debug for RenderError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             RenderError::MissingBrace(pos) =>
-                write!(f, "Missing closing brace (opening brace at {:?})", pos),
+                write!(f, "{:?}: Missing closing brace", pos),
+            RenderError::UndefinedName(pos, name) =>
+                write!(f, "{:?}: Name '{}' is undefined", pos, name),
         }
     }
 }
@@ -36,12 +39,12 @@ pub fn render(
     let mut tmpl_all = String::new();
     tmpl.read_to_string(&mut tmpl_all).unwrap();
     let tmpl_all = tmpl_all;
-    let mut braces = Vec::new();
-    let mut bangs = Vec::new();
+    let mut replace = Vec::new();
     let mut pos = Pos { raw: 0, col: 1, row: 1 };
     let mut chars = tmpl_all.chars().peekable();
     'outer: loop {
-        let open;
+        let replace_from;
+        let name_from;
         loop {
             let (c, width) = match chars.next() {
                 Some(c) => (c, c.len_utf8()),
@@ -53,11 +56,15 @@ pub fn render(
                     if escaped {
                         pos.raw += width;
                         pos.col += 1;
-                        bangs.push(pos);
+                        let bang_pos = pos;
+                        pos.raw += '!'.len_utf8();
+                        pos.col += 1;
+                        replace.push((bang_pos, pos, None));
                     } else {
-                        open = pos;
+                        replace_from = pos;
                         pos.raw += width;
                         pos.col += 1;
+                        name_from = pos;
                         break;
                     }
                 },
@@ -73,20 +80,22 @@ pub fn render(
             }
         }
 
-        let close;
+        let replace_to;
+        let name_to;
         loop {
             let (c, width) = match chars.next() {
                 Some(c) => (c, c.len_utf8()),
-                None => return Err(RenderError::MissingBrace(open)),
+                None => return Err(RenderError::MissingBrace(replace_from)),
             };
             match c {
                 '}' => {
-                    close = pos;
+                    name_to = pos;
                     pos.raw += width;
                     pos.col += 1;
+                    replace_to = pos;
                     break;
                 },
-                '\n' => return Err(RenderError::MissingBrace(open)),
+                '\n' => return Err(RenderError::MissingBrace(replace_from)),
                 _ => {
                     pos.raw += width;
                     pos.col += 1;
@@ -94,11 +103,37 @@ pub fn render(
             }
         }
 
-        braces.push((open, close));
+        replace.push((replace_from, replace_to, Some((name_from, name_to))));
     }
-    println!("braces: {:?}", braces);
-    println!("bangs: {:?}", bangs);
-    out.write(tmpl_all.as_bytes()).unwrap();
+    println!("replace: {:?}", replace);
+
+    let mut maybe_prev: Option<Pos> = None;
+    for (replace_from, replace_to, name) in replace {
+        if let Some(prev) = maybe_prev {
+            out.write(tmpl_all[prev.raw..replace_from.raw].as_bytes());
+        } else {
+            out.write(tmpl_all[0..replace_from.raw].as_bytes());
+        }
+
+        if let Some((name_from, name_to)) = name {
+            let name = &tmpl_all[name_from.raw..name_to.raw];
+            if let Some(val) = ctx.get(name) {
+                out.write(val.as_bytes());
+            } else {
+                return Err(
+                    RenderError::UndefinedName(name_from, name.to_string())
+                );
+            }
+        }
+
+        maybe_prev = Some(replace_to);
+    }
+    if let Some(prev) = maybe_prev {
+        out.write(tmpl_all[prev.raw..tmpl_all.len()].as_bytes());
+    } else {
+        out.write(tmpl_all.as_bytes());
+    }
+
     return Ok(());
 }
 
