@@ -230,5 +230,14 @@ mod test {
             ) => assert_eq!(place, "place"),
             _ => panic!(),
         }
+
+        let r = "{aa}bb{cc}\ndd{ee}";
+        let mut w = Vec::new();
+        let mut h = HashMap::new();
+        h.insert("aa".to_string(), "AA".to_string());
+        h.insert("cc".to_string(), "CC".to_string());
+        h.insert("ee".to_string(), "EE".to_string());
+        render(r.as_bytes(), &mut w, &h).unwrap();
+        assert_eq!(str::from_utf8(&w).unwrap(), "AAbbCC\nddEE");
     }
 }
