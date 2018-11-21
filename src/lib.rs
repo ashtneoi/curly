@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io::prelude::*;
 
+#[derive(Eq, PartialEq)]
 pub enum RenderError {
     MissingBrace(Pos),
     UndefinedName(Pos, String),
@@ -18,7 +19,7 @@ impl fmt::Debug for RenderError {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct Pos {
     raw: usize,
     col: usize,
@@ -139,7 +140,7 @@ pub fn render(
 
 #[cfg(test)]
 mod test {
-    use crate::render;
+    use crate::{Pos, render, RenderError};
     use std::collections::HashMap;
     use std::str;
 
@@ -169,5 +170,39 @@ mod test {
         h.insert("place".to_string(), "there".to_string());
         render(r.as_bytes(), &mut w, &h).unwrap();
         assert_eq!(str::from_utf8(&w).unwrap(), "hello there");
+
+        let r = "hello {place";
+        let mut w = Vec::new();
+        let mut h = HashMap::new();
+        h.insert("place".to_string(), "there".to_string());
+        assert_eq!(
+            render(r.as_bytes(), &mut w, &h).unwrap_err(),
+            RenderError::MissingBrace(
+                Pos { raw: 6, row: 1, col: 7 },
+            ),
+        );
+
+        let r = "hello {place\n}";
+        let mut w = Vec::new();
+        let mut h = HashMap::new();
+        h.insert("place".to_string(), "there".to_string());
+        assert_eq!(
+            render(r.as_bytes(), &mut w, &h).unwrap_err(),
+            RenderError::MissingBrace(
+                Pos { raw: 6, row: 1, col: 7 },
+            ),
+        );
+
+        let r = "hello {place}";
+        let mut w = Vec::new();
+        let mut h = HashMap::new();
+        h.insert("face".to_string(), "there".to_string());
+        assert_eq!(
+            render(r.as_bytes(), &mut w, &h).unwrap_err(),
+            RenderError::UndefinedName(
+                Pos { raw: 7, row: 1, col: 8 },
+                "place".to_string(),
+            ),
+        );
     }
 }
