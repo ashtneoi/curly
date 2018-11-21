@@ -5,6 +5,7 @@ use std::io::prelude::*;
 #[derive(Eq, PartialEq)]
 pub enum RenderError {
     MissingBrace(Pos),
+    UnexpectedBrace(Pos),
     UndefinedName(Pos, String),
 }
 
@@ -13,6 +14,8 @@ impl fmt::Debug for RenderError {
         match self {
             RenderError::MissingBrace(pos) =>
                 write!(f, "{:?}: Missing closing brace", pos),
+            RenderError::UnexpectedBrace(pos) =>
+                write!(f, "{:?}: Unexpected opening brace", pos),
             RenderError::UndefinedName(pos, name) =>
                 write!(f, "{:?}: Name '{}' is undefined", pos, name),
         }
@@ -96,6 +99,7 @@ pub fn render(
                     replace_to = pos;
                     break;
                 },
+                '{' => return Err(RenderError::UnexpectedBrace(pos)),
                 '\n' => return Err(RenderError::MissingBrace(replace_from)),
                 _ => {
                     pos.raw += width;
@@ -173,10 +177,8 @@ mod test {
 
         let r = "hello {place";
         let mut w = Vec::new();
-        let mut h = HashMap::new();
-        h.insert("place".to_string(), "there".to_string());
         assert_eq!(
-            render(r.as_bytes(), &mut w, &h).unwrap_err(),
+            render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err(),
             RenderError::MissingBrace(
                 Pos { raw: 6, row: 1, col: 7 },
             ),
@@ -184,12 +186,28 @@ mod test {
 
         let r = "hello {place\n}";
         let mut w = Vec::new();
-        let mut h = HashMap::new();
-        h.insert("place".to_string(), "there".to_string());
         assert_eq!(
-            render(r.as_bytes(), &mut w, &h).unwrap_err(),
+            render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err(),
             RenderError::MissingBrace(
                 Pos { raw: 6, row: 1, col: 7 },
+            ),
+        );
+
+        let r = "hello {{";
+        let mut w = Vec::new();
+        assert_eq!(
+            render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err(),
+            RenderError::UnexpectedBrace(
+                Pos { raw: 7, row: 1, col: 8 },
+            ),
+        );
+
+        let r = "hello {place{";
+        let mut w = Vec::new();
+        assert_eq!(
+            render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err(),
+            RenderError::UnexpectedBrace(
+                Pos { raw: 12, row: 1, col: 13 },
             ),
         );
 
