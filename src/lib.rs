@@ -37,8 +37,9 @@ pub fn render(
     tmpl.read_to_string(&mut tmpl_all).unwrap();
     let tmpl_all = tmpl_all;
     let mut braces = Vec::new();
+    let mut bangs = Vec::new();
     let mut pos = Pos { raw: 0, col: 1, row: 1 };
-    let mut chars = tmpl_all.chars();
+    let mut chars = tmpl_all.chars().peekable();
     'outer: loop {
         let open;
         loop {
@@ -48,10 +49,17 @@ pub fn render(
             };
             match c {
                 '{' => {
-                    open = pos;
-                    pos.raw += width;
-                    pos.col += 1;
-                    break;
+                    let escaped = chars.peek().map_or(false, |c| *c == '!');
+                    if escaped {
+                        pos.raw += width;
+                        pos.col += 1;
+                        bangs.push(pos);
+                    } else {
+                        open = pos;
+                        pos.raw += width;
+                        pos.col += 1;
+                        break;
+                    }
                 },
                 '\n' => {
                     pos.raw += width;
@@ -88,7 +96,8 @@ pub fn render(
 
         braces.push((open, close));
     }
-    println!("{:?}", braces);
+    println!("braces: {:?}", braces);
+    println!("bangs: {:?}", bangs);
     out.write(tmpl_all.as_bytes()).unwrap();
     return Ok(());
 }
@@ -106,6 +115,15 @@ mod test {
         render(r.as_bytes(), &mut w, &HashMap::<String, String>::new())
             .unwrap();
         assert_eq!(str::from_utf8(&w).unwrap(), "hello there");
+    }
+
+    #[test]
+    fn test_escape() {
+        let r = "hello {!there}";
+        let mut w = Vec::new();
+        render(r.as_bytes(), &mut w, &HashMap::<String, String>::new())
+            .unwrap();
+        assert_eq!(str::from_utf8(&w).unwrap(), "hello {there}");
     }
 
     #[test]
