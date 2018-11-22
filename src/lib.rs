@@ -91,13 +91,6 @@ enum Token {
 }
 
 #[derive(Debug)]
-enum Tag {
-    Var(Pos, Pos),
-    File(Pos, Pos, Pos),
-    Def(Pos, Pos, Pos),
-}
-
-#[derive(Debug)]
 enum ItemKind {
     File,
     Def,
@@ -125,7 +118,7 @@ fn replace(
         if let Some(prev) = maybe_prev {
             s.push_str(&tmpl_all[prev.raw..replace_from.raw]);
         } else {
-            s.push_str(&tmpl_all[0..replace_from.raw]);
+            s.push_str(&tmpl_all[from.raw..replace_from.raw]);
         }
 
         s.push_str(&replacement);
@@ -133,9 +126,9 @@ fn replace(
         maybe_prev = Some(replace_to);
     }
     if let Some(prev) = maybe_prev {
-        s.push_str(&tmpl_all[prev.raw..tmpl_all.len()]);
+        s.push_str(&tmpl_all[prev.raw..to.raw]);
     } else {
-        s.push_str(tmpl_all);
+        s.push_str(&tmpl_all[from.raw..to.raw]);
     }
 
     s
@@ -260,13 +253,13 @@ pub fn render(
                         }
                         let cur = item_stack.pop().unwrap();
                         match cur.kind {
-                            File => (),
+                            ItemKind::File => (),
                             _ => return Err(
                                 RenderError::UnexpectedClosingTag(tag_from)
                             ),
                         }
                         let mut w = Vec::new();
-                        let mut f = File::open(cur.name).map_err(
+                        let f = File::open(cur.name).map_err(
                             |e| RenderError::IoError(e)
                         )?;
                         render(&f, &mut w, &cur.ctx)?;
