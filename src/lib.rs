@@ -1,12 +1,17 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::fs::File;
 use std::io;
 use std::io::prelude::*;
+use std::ops;
+use std::str;
 
 pub enum RenderError {
     MissingBrace(Pos),
     MissingHash(Pos),
     MissingColon(Pos),
+    MissingClosingTag(Pos),
+    UnexpectedClosingTag(Pos),
     UndefinedName(Pos, String),
     IoError(io::Error),
 }
@@ -15,15 +20,19 @@ impl fmt::Debug for RenderError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             RenderError::MissingBrace(pos) =>
-                write!(f, "{:?}: Missing closing brace", pos),
+                write!(f, "{}: Missing closing brace", pos),
             RenderError::MissingHash(pos) =>
-                write!(f, "{:?}: Missing hash", pos),
+                write!(f, "{}: Missing hash", pos),
             RenderError::MissingColon(pos) =>
-                write!(f, "{:?}: Missing colon", pos),
+                write!(f, "{}: Missing colon", pos),
+            RenderError::MissingClosingTag(pos) =>
+                write!(f, "{}: Missing corresponding closing tag", pos),
+            RenderError::UnexpectedClosingTag(pos) =>
+                write!(f, "{}: Unexpected closing tag", pos),
             RenderError::UndefinedName(pos, name) =>
-                write!(f, "{:?}: Name '{}' is undefined", pos, name),
+                write!(f, "{}: Name '{}' is undefined", pos, name),
             RenderError::IoError(err) =>
-                write!(f, "IO error: {:?}", err),
+                write!(f, "IO error: {}", err),
         }
     }
 }
@@ -47,6 +56,34 @@ impl fmt::Debug for Pos {
     }
 }
 
+impl ops::Add<char> for Pos {
+    type Output = Self;
+
+    fn add(self, rhs: char) -> Self::Output {
+        Pos {
+            raw: self.raw + rhs.len_utf8(),
+            row: self.row + if rhs == '\n' { 1 } else { 0 },
+            col: if rhs == '\n' { 1 } else { self.col + 1 },
+        }
+    }
+}
+
+impl ops::Sub<char> for Pos {
+    type Output = Self;
+
+    fn sub(self, rhs: char) -> Self::Output {
+        if rhs == '\n' {
+            panic!("can't do that");
+        }
+
+        Pos {
+            raw: self.raw - rhs.len_utf8(),
+            row: self.row,
+            col: self.col - 1,
+        }
+    }
+}
+
 #[derive(Debug)]
 enum Token {
     Tag(Pos, Pos),
@@ -61,12 +98,47 @@ enum Tag {
 }
 
 #[derive(Debug)]
+enum ItemKind {
+    File,
+    Def,
+}
 
 #[derive(Debug)]
-enum Replacement {
-    Null,
-    Var(String, Option<String>),
-    File(String),
+struct Item {
+    from: Pos,
+    to: Pos, // TODO: Don't like how we don't set this for # and : tags.
+    kind: ItemKind,
+    name: String,
+    ctx: HashMap<String, String>,
+    replace: Vec<(Pos, Pos, String)>,
+}
+
+fn replace(
+    tmpl_all: &str,
+    (from, to): (Pos, Pos),
+    replace: Vec<(Pos, Pos, String)>,
+) -> String {
+    let mut s = String::new();
+
+    let mut maybe_prev: Option<Pos> = None;
+    for (replace_from, replace_to, replacement) in replace {
+        if let Some(prev) = maybe_prev {
+            s.push_str(&tmpl_all[prev.raw..replace_from.raw]);
+        } else {
+            s.push_str(&tmpl_all[0..replace_from.raw]);
+        }
+
+        s.push_str(&replacement);
+
+        maybe_prev = Some(replace_to);
+    }
+    if let Some(prev) = maybe_prev {
+        s.push_str(&tmpl_all[prev.raw..tmpl_all.len()]);
+    } else {
+        s.push_str(tmpl_all);
+    }
+
+    s
 }
 
 // {foo}x{:bar:}y{!
@@ -128,10 +200,9 @@ pub fn render(
             };
             match c {
                 '}' => {
-                    name_to = pos;
                     pos.raw += width;
                     pos.col += 1;
-                    replace_to = pos;
+                    tag_to = pos;
                     break;
                 },
                 '{' => return Err(RenderError::MissingBrace(pos)),
@@ -145,77 +216,137 @@ pub fn render(
 
         tokens.push(Token::Tag(tag_from, tag_to));
     }
+    let tmpl_to = pos;
     let tokens = tokens;
 
     // Gather replacements.
 
-    let mut replace = Vec::new();
     let mut tokens = tokens.iter();
-    let mut tag_stack = Vec::new();
-    let mut ctx_stack = Vec::new();
+    let mut item_stack = vec![Item {
+        from: Pos { raw: 0, row: 1, col: 1 },
+        to: tmpl_to,
+        kind: ItemKind::Def,
+        name: "".to_string(),
+        ctx: HashMap::new(),
+        replace: Vec::new(),
+    }];
     loop {
         match tokens.next() {
-            Some(Tag(tag_from, tag_to)) => {
-                let label_from = tag_from + '{'.len_utf8();
-                let label_to = tag_from - '}'.len_utf8();
-                let label = tmpl_all[tag_from..tag_to].to_string();
+            Some(&Token::Tag(tag_from, tag_to)) => {
+                let label_from = tag_from + '{';
+                let label_to = tag_from - '}';
+                let label = &tmpl_all[tag_from.raw..tag_to.raw];
                 if label.starts_with('#') {
                     if !label.ends_with('#') {
                         return Err(RenderError::MissingHash(tag_to));
                     }
-                    let name_from = '#'.len_utf8();
-                    let name_to = label.len() - '#'.len_utf8();
-                    tag_stack.push(Tag::File(
-                        label[name_from..name_to].to_string(),
-                    ));
+                    if label.len() == 1 { // {#}
+                        if item_stack.len() == 1 {
+                            return Err(
+                                RenderError::UnexpectedClosingTag(tag_from)
+                            );
+                        }
+                        let cur = item_stack.pop().unwrap();
+                        match cur.kind {
+                            File => (),
+                            _ => return Err(
+                                RenderError::UnexpectedClosingTag(tag_from)
+                            ),
+                        }
+                        let mut w = Vec::new();
+                        let mut f = File::open(cur.name).map_err(
+                            |e| RenderError::IoError(e)
+                        )?;
+                        render(&f, &mut w, &cur.ctx)?;
+                        item_stack.last_mut().unwrap().replace.push((
+                            cur.from,
+                            tag_to,
+                            String::from_utf8(w).unwrap(),
+                        ));
+                        // Replacements don't matter.
+                    } else { // {#name#}
+                        let name_from = '#'.len_utf8();
+                        let name_to = label.len() - '#'.len_utf8();
+                        item_stack.push(Item {
+                            from: tag_from,
+                            to: tag_from, // doesn't matter
+                            kind: ItemKind::File,
+                            name: label[name_from..name_to].to_string(),
+                            ctx: HashMap::new(),
+                            replace: Vec::new(),
+                        });
+                    }
                 } else if label.starts_with(':') {
                     if !label.ends_with(':') {
                         return Err(RenderError::MissingColon(tag_to));
                     }
-                    let name_from = ':'.len_utf8();
-                    let name_to = label.len() - ':'.len_utf8();
-                    tag_stack.push(Tag::Def(
-                        label[name_from..name_to].to_string(),
+                    if label.len() == 1 { // {:}
+                        if item_stack.len() == 1 {
+                            return Err(
+                                RenderError::UnexpectedClosingTag(tag_from)
+                            );
+                        }
+                        let cur = item_stack.pop().unwrap();
+                        item_stack.last_mut().unwrap().ctx.insert(
+                            label.to_string(),
+                            replace(&tmpl_all, (cur.from, tag_to), cur.replace),
+                        );
+                    } else { // {:name:}
+                        let name_from = ':'.len_utf8();
+                        let name_to = label.len() - ':'.len_utf8();
+                        item_stack.push(Item {
+                            from: tag_from,
+                            to: tag_from, // doesn't matter
+                            kind: ItemKind::Def,
+                            name: label[name_from..name_to].to_string(),
+                            ctx: HashMap::new(),
+                            replace: Vec::new(),
+                        });
+                    }
+                } else {
+                    let val = match item_stack.last().unwrap().ctx.get(label) {
+                        Some(v) => v.to_string(),
+                        None => return Err(RenderError::UndefinedName(
+                            tag_from,
+                            label.to_string(),
+                        )),
+                    };
+                    item_stack.last_mut().unwrap().replace.push((
+                        tag_from,
+                        tag_to,
+                        val,
                     ));
                 }
             },
+            Some(&Token::Bang(pos)) => {
+                let to = Pos {
+                    raw: pos.raw + '!'.len_utf8(),
+                    row: pos.row,
+                    col: pos.col + 1,
+                };
+                item_stack.last_mut().unwrap().replace.push((
+                    pos,
+                    to,
+                    "".to_string(),
+                ));
+            },
+            None => break, // FIXME: so obviously this is just a for loop
         }
     }
-    let replace = replace;
-
-    // Perform replacements.
-
-    let mut maybe_prev: Option<Pos> = None;
-    for (replace_from, replace_to, name) in replace {
-        if let Some(prev) = maybe_prev {
-            out.write(tmpl_all[prev.raw..replace_from.raw].as_bytes())
-                .map_err(|e| RenderError::IoError(e))?;
-        } else {
-            out.write(tmpl_all[0..replace_from.raw].as_bytes())
-                .map_err(|e| RenderError::IoError(e))?;
-        }
-
-        if let Some((name_from, name_to)) = name {
-            let name = &tmpl_all[name_from.raw..name_to.raw];
-            if let Some(val) = ctx.get(name) {
-                out.write(val.as_bytes())
-                    .map_err(|e| RenderError::IoError(e))?;
-            } else {
-                return Err(
-                    RenderError::UndefinedName(name_from, name.to_string())
-                );
-            }
-        }
-
-        maybe_prev = Some(replace_to);
+    assert!(item_stack.len() >= 1);
+    if item_stack.len() > 1 {
+        return Err(RenderError::MissingClosingTag(
+            item_stack.last().unwrap().from
+        ));
     }
-    if let Some(prev) = maybe_prev {
-        out.write(tmpl_all[prev.raw..tmpl_all.len()].as_bytes())
-            .map_err(|e| RenderError::IoError(e))?;
-    } else {
-        out.write(tmpl_all.as_bytes())
-            .map_err(|e| RenderError::IoError(e))?;
-    }
+
+    let cur = item_stack.pop().unwrap();
+    out.write(replace(
+        &tmpl_all,
+        (cur.from, cur.to),
+        cur.replace,
+    ).as_bytes())
+        .map_err(|e| RenderError::IoError(e))?;
 
     return Ok(());
 }
