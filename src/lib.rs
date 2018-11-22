@@ -5,7 +5,8 @@ use std::io::prelude::*;
 
 pub enum RenderError {
     MissingBrace(Pos),
-    UnexpectedBrace(Pos),
+    MissingHash(Pos),
+    MissingColon(Pos),
     UndefinedName(Pos, String),
     IoError(io::Error),
 }
@@ -15,8 +16,10 @@ impl fmt::Debug for RenderError {
         match self {
             RenderError::MissingBrace(pos) =>
                 write!(f, "{:?}: Missing closing brace", pos),
-            RenderError::UnexpectedBrace(pos) =>
-                write!(f, "{:?}: Unexpected opening brace", pos),
+            RenderError::MissingHash(pos) =>
+                write!(f, "{:?}: Missing hash", pos),
+            RenderError::MissingColon(pos) =>
+                write!(f, "{:?}: Missing colon", pos),
             RenderError::UndefinedName(pos, name) =>
                 write!(f, "{:?}: Name '{}' is undefined", pos, name),
             RenderError::IoError(err) =>
@@ -25,19 +28,51 @@ impl fmt::Debug for RenderError {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct Pos {
     raw: usize,
     col: usize,
     row: usize,
 }
 
-impl fmt::Debug for Pos {
+impl fmt::Display for Pos {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}:{}({})", self.row, self.col, self.raw)
     }
 }
 
+impl fmt::Debug for Pos {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+#[derive(Debug)]
+enum Token {
+    Tag(Pos, Pos),
+    Bang(Pos),
+}
+
+#[derive(Debug)]
+enum Tag {
+    Var(Pos, Pos),
+    File(Pos, Pos, Pos),
+    Def(Pos, Pos, Pos),
+}
+
+#[derive(Debug)]
+
+#[derive(Debug)]
+enum Replacement {
+    Null,
+    Var(String, Option<String>),
+    File(String),
+}
+
+// {foo}x{:bar:}y{!
+// tokens: {foo} {:bar:} !
+// tags: {foo} {:bar:}
+// labels: foo :bar:
 pub fn render(
     mut tmpl: impl Read,
     out: &mut impl Write,
@@ -46,12 +81,14 @@ pub fn render(
     let mut tmpl_all = String::new();
     tmpl.read_to_string(&mut tmpl_all).unwrap();
     let tmpl_all = tmpl_all;
-    let mut replace = Vec::new();
+
+    // Gather tokens.
+
+    let mut tokens = Vec::new();
     let mut pos = Pos { raw: 0, col: 1, row: 1 };
     let mut chars = tmpl_all.chars().peekable();
     'outer: loop {
-        let replace_from;
-        let name_from;
+        let tag_from;
         loop {
             let (c, width) = match chars.next() {
                 Some(c) => (c, c.len_utf8()),
@@ -63,15 +100,11 @@ pub fn render(
                     if escaped {
                         pos.raw += width;
                         pos.col += 1;
-                        let bang_pos = pos;
-                        pos.raw += '!'.len_utf8();
-                        pos.col += 1;
-                        replace.push((bang_pos, pos, None));
+                        tokens.push(Token::Bang(pos));
                     } else {
-                        replace_from = pos;
+                        tag_from = pos;
                         pos.raw += width;
                         pos.col += 1;
-                        name_from = pos;
                         break;
                     }
                 },
@@ -87,12 +120,11 @@ pub fn render(
             }
         }
 
-        let replace_to;
-        let name_to;
+        let tag_to;
         loop {
             let (c, width) = match chars.next() {
                 Some(c) => (c, c.len_utf8()),
-                None => return Err(RenderError::MissingBrace(replace_from)),
+                None => return Err(RenderError::MissingBrace(tag_from)),
             };
             match c {
                 '}' => {
@@ -102,8 +134,8 @@ pub fn render(
                     replace_to = pos;
                     break;
                 },
-                '{' => return Err(RenderError::UnexpectedBrace(pos)),
-                '\n' => return Err(RenderError::MissingBrace(replace_from)),
+                '{' => return Err(RenderError::MissingBrace(pos)),
+                '\n' => return Err(RenderError::MissingBrace(tag_from)),
                 _ => {
                     pos.raw += width;
                     pos.col += 1;
@@ -111,9 +143,47 @@ pub fn render(
             }
         }
 
-        replace.push((replace_from, replace_to, Some((name_from, name_to))));
+        tokens.push(Token::Tag(tag_from, tag_to));
     }
-    println!("replace: {:?}", replace);
+    let tokens = tokens;
+
+    // Gather replacements.
+
+    let mut replace = Vec::new();
+    let mut tokens = tokens.iter();
+    let mut tag_stack = Vec::new();
+    let mut ctx_stack = Vec::new();
+    loop {
+        match tokens.next() {
+            Some(Tag(tag_from, tag_to)) => {
+                let label_from = tag_from + '{'.len_utf8();
+                let label_to = tag_from - '}'.len_utf8();
+                let label = tmpl_all[tag_from..tag_to].to_string();
+                if label.starts_with('#') {
+                    if !label.ends_with('#') {
+                        return Err(RenderError::MissingHash(tag_to));
+                    }
+                    let name_from = '#'.len_utf8();
+                    let name_to = label.len() - '#'.len_utf8();
+                    tag_stack.push(Tag::File(
+                        label[name_from..name_to].to_string(),
+                    ));
+                } else if label.starts_with(':') {
+                    if !label.ends_with(':') {
+                        return Err(RenderError::MissingColon(tag_to));
+                    }
+                    let name_from = ':'.len_utf8();
+                    let name_to = label.len() - ':'.len_utf8();
+                    tag_stack.push(Tag::Def(
+                        label[name_from..name_to].to_string(),
+                    ));
+                }
+            },
+        }
+    }
+    let replace = replace;
+
+    // Perform replacements.
 
     let mut maybe_prev: Option<Pos> = None;
     for (replace_from, replace_to, name) in replace {
@@ -204,7 +274,7 @@ mod test {
         let r = "hello {{";
         let mut w = Vec::new();
         match render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err() {
-            RenderError::UnexpectedBrace(
+            RenderError::MissingBrace(
                 Pos { raw: 7, row: 1, col: 8 },
             ) => (),
             _ => panic!(),
@@ -213,7 +283,7 @@ mod test {
         let r = "hello {place{.";
         let mut w = Vec::new();
         match render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err() {
-            RenderError::UnexpectedBrace(
+            RenderError::MissingBrace(
                 Pos { raw: 12, row: 1, col: 13 },
             ) => (),
             _ => panic!(),
