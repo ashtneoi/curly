@@ -141,6 +141,18 @@ fn replace(
     s
 }
 
+fn ctx_get(item_stack: &Vec<Item>, name: &str) -> Option<String> {
+    for item in item_stack.iter().rev() {
+        println!("{:?}", item.ctx);
+        match item.ctx.get(name) {
+            Some(val) => return Some(val.to_string()),
+            None => (),
+        }
+    }
+
+    None
+}
+
 // {foo}x{:bar:}y{!
 // tokens: {foo} {:bar:} !
 // tags: {foo} {:bar:}
@@ -227,15 +239,15 @@ pub fn render(
         to: tmpl_to,
         kind: ItemKind::Def,
         name: "".to_string(),
-        ctx: HashMap::new(),
+        ctx: ctx.clone(),
         replace: Vec::new(),
     }];
     loop {
         match tokens.next() {
             Some(&Token::Tag(tag_from, tag_to)) => {
                 let label_from = tag_from + '{';
-                let label_to = tag_from - '}';
-                let label = &tmpl_all[tag_from.raw..tag_to.raw];
+                let label_to = tag_to - '}';
+                let label = &tmpl_all[label_from.raw..label_to.raw];
                 if label.starts_with('#') {
                     if !label.ends_with('#') {
                         return Err(RenderError::MissingHash(tag_to));
@@ -304,10 +316,10 @@ pub fn render(
                         });
                     }
                 } else {
-                    let val = match item_stack.last().unwrap().ctx.get(label) {
-                        Some(v) => v.to_string(),
+                    let val = match ctx_get(&item_stack, label) {
+                        Some(v) => v,
                         None => return Err(RenderError::UndefinedName(
-                            tag_from,
+                            label_from,
                             label.to_string(),
                         )),
                     };
@@ -429,7 +441,7 @@ mod test {
                 Pos { raw: 7, row: 1, col: 8 },
                 place,
             ) => assert_eq!(place, "place"),
-            _ => panic!(),
+            e => panic!("{:?}", e),
         }
 
         let r = "{aa}bb{cc}\ndd{ee}";
