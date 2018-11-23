@@ -16,24 +16,30 @@ pub enum RenderError {
     IoError(io::Error),
 }
 
-impl fmt::Debug for RenderError {
+impl fmt::Display for RenderError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             RenderError::MissingBrace(pos) =>
-                write!(f, "{}: Missing closing brace", pos),
+                write!(f, "{}: missing closing brace", pos),
             RenderError::MissingHash(pos) =>
-                write!(f, "{}: Missing hash", pos),
+                write!(f, "{}: missing hash", pos),
             RenderError::MissingColon(pos) =>
-                write!(f, "{}: Missing colon", pos),
+                write!(f, "{}: missing colon", pos),
             RenderError::MissingClosingTag(pos) =>
-                write!(f, "{}: Missing corresponding closing tag", pos),
+                write!(f, "{}: missing corresponding closing tag", pos),
             RenderError::UnexpectedClosingTag(pos) =>
-                write!(f, "{}: Unexpected closing tag", pos),
+                write!(f, "{}: unexpected closing tag", pos),
             RenderError::UndefinedName(pos, name) =>
-                write!(f, "{}: Name '{}' is undefined", pos, name),
+                write!(f, "{}: name '{}' is undefined", pos, name),
             RenderError::IoError(err) =>
                 write!(f, "IO error: {}", err),
         }
+    }
+}
+
+impl fmt::Debug for RenderError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(self, f)
     }
 }
 
@@ -136,7 +142,6 @@ fn replace(
 
 fn ctx_get(item_stack: &Vec<Item>, name: &str) -> Option<String> {
     for item in item_stack.iter().rev() {
-        println!("{:?}", item.ctx);
         match item.ctx.get(name) {
             Some(val) => return Some(val.to_string()),
             None => (),
@@ -292,6 +297,12 @@ pub fn render(
                             );
                         }
                         let cur = item_stack.pop().unwrap();
+                        match cur.kind {
+                            ItemKind::Def => (),
+                            _ => return Err(
+                                RenderError::UnexpectedClosingTag(tag_from)
+                            ),
+                        }
                         item_stack.last_mut().unwrap().ctx.insert(
                             label.to_string(),
                             replace(&tmpl_all, (cur.from, tag_to), cur.replace),
