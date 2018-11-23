@@ -1,4 +1,4 @@
-use crate::render;
+use curly::render;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
