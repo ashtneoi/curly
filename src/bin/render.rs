@@ -1,11 +1,10 @@
-use crate::lib::render;
+use crate::render;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
+use std::path::Path;
 use std::process::exit;
 use std::str;
-
-mod lib;
 
 fn exit_with_usage() -> ! {
     eprintln!("Usage: curly TMPLPATH [NAME=VAL ...]");
@@ -36,7 +35,7 @@ fn main() {
     });
 
     let mut out = Vec::new();
-    match render(&f, &mut out, &ctx) {
+    match render(&f, &mut out, &ctx, Path::new(".")) {
         Ok(_) => (),
         Err(e) => {
             eprintln!("error: {}", e);

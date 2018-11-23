@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 use std::ops;
+use std::path::Path;
 use std::str;
 
 pub enum RenderError {
@@ -160,6 +161,7 @@ pub fn render(
     mut tmpl: impl Read,
     out: &mut impl Write,
     ctx: &HashMap<String, String>,
+    dir: &Path,
 ) -> Result<(), RenderError> {
     let mut tmpl_all = String::new();
     tmpl.read_to_string(&mut tmpl_all).unwrap();
@@ -272,10 +274,16 @@ pub fn render(
                             ),
                         }
                         let mut w = Vec::new();
-                        let f = File::open(cur.name).map_err(
+                        let path = dir.join(cur.name);
+                        let f = File::open(&path).map_err(
                             |e| RenderError::IoError(e)
                         )?;
-                        render(&f, &mut w, &cur.ctx)?;
+                        render(
+                            &f,
+                            &mut w,
+                            &cur.ctx,
+                            path.parent().unwrap(),
+                        )?;
                         item_stack.last_mut().unwrap().replace.push((
                             cur.outer.0,
                             tag_to,
@@ -395,14 +403,19 @@ pub fn render(
 mod test {
     use crate::{Pos, render, RenderError};
     use std::collections::HashMap;
+    use std::path::Path;
     use std::str;
 
     #[test]
     fn test_simple_render() {
         let r = "hello there.";
         let mut w = Vec::new();
-        render(r.as_bytes(), &mut w, &HashMap::<String, String>::new())
-            .unwrap();
+        render(
+            r.as_bytes(),
+            &mut w,
+            &HashMap::<String, String>::new(),
+            Path::new("."),
+        ).unwrap();
         assert_eq!(str::from_utf8(&w).unwrap(), "hello there.");
     }
 
@@ -410,8 +423,12 @@ mod test {
     fn test_escape() {
         let r = "hello {!there}.";
         let mut w = Vec::new();
-        render(r.as_bytes(), &mut w, &HashMap::<String, String>::new())
-            .unwrap();
+        render(
+            r.as_bytes(),
+            &mut w,
+            &HashMap::<String, String>::new(),
+            Path::new("."),
+        ).unwrap();
         assert_eq!(str::from_utf8(&w).unwrap(), "hello {there}.");
     }
 
@@ -421,12 +438,22 @@ mod test {
         let mut w = Vec::new();
         let mut h = HashMap::new();
         h.insert("place".to_string(), "there".to_string());
-        render(r.as_bytes(), &mut w, &h).unwrap();
+        render(
+            r.as_bytes(),
+            &mut w,
+            &h,
+            Path::new("."),
+        ).unwrap();
         assert_eq!(str::from_utf8(&w).unwrap(), "hello there.");
 
         let r = "hello {place.";
         let mut w = Vec::new();
-        match render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err() {
+        match render(
+            r.as_bytes(),
+            &mut w,
+            &HashMap::new(),
+            Path::new("."),
+        ).unwrap_err() {
             RenderError::MissingBrace(
                 Pos { raw: 6, row: 1, col: 7 },
             ) => (),
@@ -435,7 +462,12 @@ mod test {
 
         let r = "hello {place\n}.";
         let mut w = Vec::new();
-        match render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err() {
+        match render(
+            r.as_bytes(),
+            &mut w,
+            &HashMap::new(),
+            Path::new("."),
+        ).unwrap_err() {
             RenderError::MissingBrace(
                 Pos { raw: 6, row: 1, col: 7 },
             ) => (),
@@ -444,7 +476,12 @@ mod test {
 
         let r = "hello {{";
         let mut w = Vec::new();
-        match render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err() {
+        match render(
+            r.as_bytes(),
+            &mut w,
+            &HashMap::new(),
+            Path::new("."),
+        ).unwrap_err() {
             RenderError::MissingBrace(
                 Pos { raw: 7, row: 1, col: 8 },
             ) => (),
@@ -453,7 +490,12 @@ mod test {
 
         let r = "hello {place{.";
         let mut w = Vec::new();
-        match render(r.as_bytes(), &mut w, &HashMap::new()).unwrap_err() {
+        match render(
+            r.as_bytes(),
+            &mut w,
+            &HashMap::new(),
+            Path::new("."),
+        ).unwrap_err() {
             RenderError::MissingBrace(
                 Pos { raw: 12, row: 1, col: 13 },
             ) => (),
@@ -464,7 +506,12 @@ mod test {
         let mut w = Vec::new();
         let mut h = HashMap::new();
         h.insert("face".to_string(), "there".to_string());
-        match render(r.as_bytes(), &mut w, &h).unwrap_err() {
+        match render(
+            r.as_bytes(),
+            &mut w,
+            &h,
+            Path::new("."),
+        ).unwrap_err() {
             RenderError::UndefinedName(
                 Pos { raw: 7, row: 1, col: 8 },
                 place,
@@ -478,7 +525,12 @@ mod test {
         h.insert("aa".to_string(), "AA".to_string());
         h.insert("cc".to_string(), "CC".to_string());
         h.insert("ee".to_string(), "EE".to_string());
-        render(r.as_bytes(), &mut w, &h).unwrap();
+        render(
+            r.as_bytes(),
+            &mut w,
+            &h,
+            Path::new("."),
+        ).unwrap();
         assert_eq!(str::from_utf8(&w).unwrap(), "AAbbCC\nddEE");
     }
 }
