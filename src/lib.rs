@@ -104,8 +104,9 @@ enum ItemKind {
 
 #[derive(Debug)]
 struct Item {
-    from: Pos,
-    to: Pos, // TODO: Don't like how we don't set this for # and : tags.
+    outer: (Pos, Pos),
+    inner: (Pos, Pos),
+    // TODO: Don't like how we don't set outer.0 and inner.0 for # and : tags.
     kind: ItemKind,
     name: String,
     ctx: HashMap<String, String>,
@@ -180,6 +181,7 @@ pub fn render(
                 '{' => {
                     let escaped = chars.peek().map_or(false, |c| *c == '!');
                     if escaped {
+                        // TODO: use Add<char> here and elsewhere
                         pos.raw += width;
                         pos.col += 1;
                         tokens.push(Token::Bang(pos));
@@ -233,8 +235,14 @@ pub fn render(
 
     let mut tokens = tokens.iter();
     let mut item_stack = vec![Item {
-        from: Pos { raw: 0, row: 1, col: 1 },
-        to: tmpl_to,
+        outer: (
+            Pos { raw: 0, row: 1, col: 1 },
+            tmpl_to,
+        ),
+        inner: (
+            Pos { raw: 0, row: 1, col: 1 },
+            tmpl_to,
+        ),
         kind: ItemKind::Def,
         name: "".to_string(),
         ctx: ctx.clone(),
@@ -269,7 +277,7 @@ pub fn render(
                         )?;
                         render(&f, &mut w, &cur.ctx)?;
                         item_stack.last_mut().unwrap().replace.push((
-                            cur.from,
+                            cur.outer.0,
                             tag_to,
                             String::from_utf8(w).unwrap(),
                         ));
@@ -278,8 +286,14 @@ pub fn render(
                         let name_from = '#'.len_utf8();
                         let name_to = label.len() - '#'.len_utf8();
                         item_stack.push(Item {
-                            from: tag_from,
-                            to: tag_from, // doesn't matter
+                            outer: (
+                                tag_from,
+                                tag_from, // doesn't matter
+                            ),
+                            inner: (
+                                tag_to,
+                                tag_to // doesn't matter
+                            ),
                             kind: ItemKind::File,
                             name: label[name_from..name_to].to_string(),
                             ctx: HashMap::new(),
@@ -304,15 +318,25 @@ pub fn render(
                             ),
                         }
                         item_stack.last_mut().unwrap().ctx.insert(
-                            label.to_string(),
-                            replace(&tmpl_all, (cur.from, tag_to), cur.replace),
+                            cur.name,
+                            replace(
+                                &tmpl_all,
+                                (cur.inner.0, tag_from),
+                                cur.replace,
+                            ),
                         );
                     } else { // {:name:}
                         let name_from = ':'.len_utf8();
                         let name_to = label.len() - ':'.len_utf8();
                         item_stack.push(Item {
-                            from: tag_from,
-                            to: tag_from, // doesn't matter
+                            outer: (
+                                tag_from,
+                                tag_from, // doesn't matter
+                            ),
+                            inner: (
+                                tag_to,
+                                tag_to // doesn't matter
+                            ),
                             kind: ItemKind::Def,
                             name: label[name_from..name_to].to_string(),
                             ctx: HashMap::new(),
@@ -352,14 +376,14 @@ pub fn render(
     assert!(item_stack.len() >= 1);
     if item_stack.len() > 1 {
         return Err(RenderError::MissingClosingTag(
-            item_stack.last().unwrap().from
+            item_stack.last().unwrap().outer.0
         ));
     }
 
     let cur = item_stack.pop().unwrap();
     out.write(replace(
         &tmpl_all,
-        (cur.from, cur.to),
+        (cur.outer.0, cur.outer.1),
         cur.replace,
     ).as_bytes())
         .map_err(|e| RenderError::IoError(e))?;
