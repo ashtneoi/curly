@@ -153,6 +153,19 @@ fn ctx_get(item_stack: &Vec<Item>, name: &str) -> Option<String> {
     None
 }
 
+pub fn render_file_to_string(
+    tmpl_path: &Path,
+    ctx: &HashMap<String, String>,
+) -> Result<String, RenderError> {
+    let f = File::open(&tmpl_path).map_err(
+        |e| RenderError::IoError(e)
+    )?;
+    let mut out = Vec::new();
+    render(&f, &mut out, ctx, tmpl_path.parent().unwrap())?;
+    Ok(String::from_utf8(out).unwrap())
+}
+
+
 // {foo}x{:bar:}y{!
 // tokens: {foo} {:bar:} !
 // tags: {foo} {:bar:}

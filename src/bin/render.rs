@@ -1,4 +1,4 @@
-use curly::render;
+use curly::render_file_to_string;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
@@ -14,7 +14,7 @@ fn exit_with_usage() -> ! {
 fn main() {
     let mut args = env::args();
     args.next().unwrap();
-    let tmplpath = match args.next() {
+    let tmpl_path = match args.next() {
         Some(t) => t,
         None => exit_with_usage(),
     };
@@ -29,19 +29,11 @@ fn main() {
         ctx.insert(parts[0].to_string(), parts[1].to_string());
     }
 
-    let f = File::open(&tmplpath).unwrap_or_else(|e| {
-        eprintln!("error: can't read file '{}' ({})", tmplpath, e);
-        exit(1);
-    });
-
-    let mut out = Vec::new();
-    match render(&f, &mut out, &ctx, Path::new(".")) {
-        Ok(_) => (),
+    match render_file_to_string(Path::new(&tmpl_path), &ctx) {
+        Ok(s) => print!("{}", s),
         Err(e) => {
             eprintln!("error: {}", e);
             exit(1);
         },
     }
-
-    print!("{}", str::from_utf8(&out).unwrap());
 }
